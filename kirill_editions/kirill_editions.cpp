@@ -16,7 +16,12 @@ struct sBall
 
 	int id;
 };
-
+struct sLineSegment
+{
+float sx, sy;
+float ex, ey;
+float radius;
+};
 
 class CirclePhysics : public olcConsoleGameEngine
 {
@@ -27,6 +32,9 @@ public:
 	}
 
 private:
+	vector<sLineSegment> vecLines;
+	sLineSegment* pSelectedLine = nullptr;
+	bool bSelectedLineStart = false;
 	vector<pair<float, float>> modelCircle;
 	vector<sBall> vecBalls;
 	sBall *pSelectedBall = nullptr;
@@ -56,12 +64,19 @@ public:
 		for (int i = 0; i < nPoints; i++)
 			modelCircle.push_back({ cosf(i / (float)(nPoints - 1) * 2.0f * 3.14159f) , sinf(i / (float)(nPoints - 1) * 2.0f * 3.14159f) });
 
-		float fDefaultRad = 8.0f;
+		float fDefaultRad = 4.0f;
 		AddBall(ScreenWidth() * 0.25f, ScreenHeight() * 0.5f, fDefaultRad);
 		AddBall(ScreenWidth() * 0.75f, ScreenHeight() * 0.5f, fDefaultRad);
 
-		/*// Add 10 Random Balls
-		for (int i = 0; i < 10; i++)
+//add lines
+float fLineRadius = 0.5f;
+vecLines.push_back({ 8.0f, 68.0f, 80.0f, 4.0f, fLineRadius });//up left
+vecLines.push_back({ 80.0f, 4.0f, 150.0f, 68.0f, fLineRadius });//up right
+
+vecLines.push_back({ 8.0f, 68.0f, 150.0f, 68.0f, fLineRadius });//down
+		
+// Add 10 Random Balls
+	/*	for (int i = 0; i < 10; i++)
 			AddBall(rand() % ScreenWidth(), rand() % ScreenHeight(), rand() % 16 + 2);*/
 
 
@@ -141,6 +156,7 @@ public:
 			if (ball.py < 0) ball.py += (float)ScreenHeight();
 			if (ball.py >= ScreenHeight()) ball.py -= (float)ScreenHeight();
 
+			
 			// Clamp velocity near zero
 			if (fabs(ball.vx*ball.vx + ball.vy*ball.vy) < 0.01f)
 			{
@@ -178,7 +194,64 @@ public:
 				}
 			}
 		}
+		// Work out static collisions with walls and displace balls so no overlaps
+		for (auto &ball : vecBalls)
+		{
+			//float fDeltaTime = ball.fSimTimeRemaining;
 
+			// Against Edges
+			for (auto &edge : vecLines)
+			{
+				// Check that line formed by velocity vector, intersects with line segment
+				float fLineX1 = edge.ex - edge.sx;
+				float fLineY1 = edge.ey - edge.sy;
+
+				float fLineX2 = ball.px - edge.sx;
+				float fLineY2 = ball.py - edge.sy;
+
+				float fEdgeLength = fLineX1 * fLineX1 + fLineY1 * fLineY1;
+
+				// This is nifty - It uses the DP of the line segment vs the line to the object, to work out
+				// how much of the segment is in the "shadow" of the object vector. The min and max clamp
+				// this to lie between 0 and the line segment length, which is then normalised. We can
+				// use this to calculate the closest point on the line segment
+				float t = max(0, min(fEdgeLength, (fLineX1 * fLineX2 + fLineY1 * fLineY2))) / fEdgeLength;
+
+				// Which we do here
+				float fClosestPointX = edge.sx + t * fLineX1;
+				float fClosestPointY = edge.sy + t * fLineY1;
+
+				// And once we know the closest point, we can check if the ball has collided with the segment in the
+				// same way we check if two balls have collided
+				float fDistance = sqrtf((ball.px - fClosestPointX)*(ball.px - fClosestPointX) + (ball.py - fClosestPointY)*(ball.py - fClosestPointY));
+
+				if (fDistance <= (ball.radius + edge.radius))
+				{
+					// Collision has occurred - treat collision point as a ball that cannot move. To make this
+					// compatible with the dynamic resolution code below, we add a fake ball with an infinite mass
+					// so it behaves like a solid object when the momentum calculations are performed
+					sBall *fakeball = new sBall();
+					fakeball->radius = edge.radius;
+					fakeball->mass = ball.mass * 0.8f;
+					fakeball->px = fClosestPointX;
+					fakeball->py = fClosestPointY;
+					fakeball->vx = -ball.vx;	// We will use these later to allow the lines to impart energy into ball
+					fakeball->vy = -ball.vy;	// if the lines are moving, i.e. like pinball flippers
+
+
+
+					// Add collision to vector of collisions for dynamic resolution
+					vecCollidingPairs.push_back({ &ball, fakeball });
+
+					// Calculate displacement required
+					float fOverlap = 1.0f * (fDistance - ball.radius - fakeball->radius);
+
+					// Displace Current Ball away from collision
+					ball.px -= fOverlap * (ball.px - fakeball->px) / fDistance;
+					ball.py -= fOverlap * (ball.py - fakeball->py) / fDistance;
+				}
+			}
+		}
 		// Now work out dynamic collisions
 		for (auto c : vecCollidingPairs)
 		{
@@ -238,6 +311,21 @@ public:
 		// Draw Cue
 		if (pSelectedBall != nullptr)
 			DrawLine(pSelectedBall->px, pSelectedBall->py, m_mousePosX, m_mousePosY, PIXEL_SOLID, FG_BLUE);
+		// Draw Lines
+		for (auto line : vecLines)
+		{
+			FillCircle(line.sx, line.sy, line.radius, PIXEL_HALF, FG_WHITE);
+			FillCircle(line.ex, line.ey, line.radius, PIXEL_HALF, FG_WHITE);
+
+			float nx = -(line.ey - line.sy);
+			float ny = (line.ex - line.sx);
+			float d = sqrt(nx*nx + ny * ny);
+			nx /= d;
+			ny /= d;
+
+			DrawLine((line.sx + nx * line.radius), (line.sy + ny * line.radius), (line.ex + nx * line.radius), (line.ey + ny * line.radius));
+			DrawLine((line.sx - nx * line.radius), (line.sy - ny * line.radius), (line.ex - nx * line.radius), (line.ey - ny * line.radius));
+		}
 
 		return true;
 	}
